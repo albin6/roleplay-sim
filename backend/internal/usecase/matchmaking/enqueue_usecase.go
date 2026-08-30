@@ -42,11 +42,11 @@ func (uc *EnqueueUseCase) Execute(ctx context.Context, in EnqueueInput) (*Enqueu
 		return nil, domainerrors.ErrAlreadyQueued
 	}
 
-	if err := uc.queue.Enqueue(ctx, userIDStr, in.EloRating); err != nil {
+	if err := uc.queue.Enqueue(ctx, userIDStr, in.EloRating, in.Difficulty); err != nil {
 		return nil, fmt.Errorf("enqueue: %w", err)
 	}
 
-	size, err := uc.queue.Size(ctx)
+	size, err := uc.queue.Size(ctx, in.Difficulty)
 	if err != nil {
 		return nil, fmt.Errorf("enqueue: get size: %w", err)
 	}

@@ -71,11 +71,11 @@ type EvaluationRepository interface {
 
 // MatchmakingQueueRepository manages the matchmaking sorted set in Redis.
 type MatchmakingQueueRepository interface {
-	Enqueue(ctx context.Context, userID string, eloRating float64) error
-	Dequeue(ctx context.Context) (userIDA, userIDB string, err error)
+	Enqueue(ctx context.Context, userID string, eloRating float64, difficulty string) error
+	Dequeue(ctx context.Context, difficulty string) (userIDA, userIDB string, err error)
 	Remove(ctx context.Context, userID string) error
 	IsQueued(ctx context.Context, userID string) (bool, error)
-	Size(ctx context.Context) (int64, error)
+	Size(ctx context.Context, difficulty string) (int64, error)
 }
 
 // RoomStateRepository manages active room state in Redis.

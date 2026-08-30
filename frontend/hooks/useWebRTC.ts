@@ -16,8 +16,9 @@ interface UseWebRTCOptions {
 
 export function useWebRTC({ roomId, sendSignal, onSignalReceived }: UseWebRTCOptions) {
   const pcRef = useRef<RTCPeerConnection | null>(null);
-  const remoteStreamRef = useRef<MediaStream>(new MediaStream());
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const hasOfferedRef = useRef(false);
 
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -28,7 +29,7 @@ export function useWebRTC({ roomId, sendSignal, onSignalReceived }: UseWebRTCOpt
   const seat = useRoomStore((s) => s.seat);
   const roomState = useRoomStore((s) => s.state);
 
-  // 1. Initialize local media (handles single-webcam concurrency gracefully)
+  // 1. Acquire local microphone and camera (handles single camera hardware lock)
   useEffect(() => {
     let activeStream: MediaStream | null = null;
     let isCancelled = false;
@@ -42,9 +43,10 @@ export function useWebRTC({ roomId, sendSignal, onSignalReceived }: UseWebRTCOpt
         }
         activeStream = s;
         setLocalStream(s);
+        setIsVideoOff(false);
       })
       .catch((err) => {
-        console.warn("Could not acquire video+audio (camera may be busy), falling back to audio:", err);
+        console.warn("Could not acquire video+audio (camera may be in use by another tab), falling back to audio:", err);
         navigator.mediaDevices
           .getUserMedia({ audio: true, video: false })
           .then((s) => {
@@ -67,35 +69,40 @@ export function useWebRTC({ roomId, sendSignal, onSignalReceived }: UseWebRTCOpt
     };
   }, []);
 
-  // 2. Initialize PeerConnection
+  // 2. Initialize PeerConnection with exact 1-audio, 1-video transceivers
   const initPeerConnection = useCallback(() => {
     if (pcRef.current) return pcRef.current;
 
     const pc = new RTCPeerConnection(ICE_SERVERS);
     pcRef.current = pc;
 
-    // Ensure transceivers exist for both audio and video so we receive remote tracks
-    // even if local device only has audio
-    try {
+    const audioTrack = localStream?.getAudioTracks()[0];
+    const videoTrack = localStream?.getVideoTracks()[0];
+
+    // Configure exactly one audio transceiver
+    if (audioTrack && localStream) {
+      pc.addTransceiver(audioTrack, { direction: "sendrecv", streams: [localStream] });
+    } else {
       pc.addTransceiver("audio", { direction: "sendrecv" });
+    }
+
+    // Configure exactly one video transceiver
+    if (videoTrack && localStream) {
+      pc.addTransceiver(videoTrack, { direction: "sendrecv", streams: [localStream] });
+    } else {
       pc.addTransceiver("video", { direction: "sendrecv" });
-    } catch (e) {
-      console.warn("Transceiver initialization notice:", e);
     }
 
-    // Attach any existing local stream tracks
-    if (localStream) {
-      localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, localStream);
-      });
-    }
-
-    // Handle incoming remote media tracks
+    // Listen for remote tracks
     pc.ontrack = (event) => {
       console.log("WebRTC ontrack received:", event.track.kind, event.track.id);
-      remoteStreamRef.current.addTrack(event.track);
-      // Create a new MediaStream instance to guarantee React state re-render
-      setRemoteStream(new MediaStream(remoteStreamRef.current.getTracks()));
+      if (!remoteStreamRef.current && typeof MediaStream !== "undefined") {
+        remoteStreamRef.current = new MediaStream();
+      }
+      if (remoteStreamRef.current) {
+        remoteStreamRef.current.addTrack(event.track);
+        setRemoteStream(new MediaStream(remoteStreamRef.current.getTracks()));
+      }
     };
 
     pc.onicecandidate = (event) => {
@@ -115,18 +122,21 @@ export function useWebRTC({ roomId, sendSignal, onSignalReceived }: UseWebRTCOpt
     return pc;
   }, [localStream, sendSignal]);
 
-  // 3. Dynamically sync local tracks to PeerConnection when localStream arrives
+  // 3. Dynamically replace tracks on transceivers when localStream changes
   useEffect(() => {
     if (!pcRef.current || !localStream) return;
     const pc = pcRef.current;
-    const senders = pc.getSenders();
 
-    localStream.getTracks().forEach((track) => {
-      const sender = senders.find((s) => s.track?.kind === track.kind);
-      if (sender) {
-        sender.replaceTrack(track);
-      } else {
-        pc.addTrack(track, localStream);
+    pc.getTransceivers().forEach((transceiver) => {
+      const kind = transceiver.receiver.track.kind;
+      const track =
+        kind === "video"
+          ? localStream.getVideoTracks()[0]
+          : localStream.getAudioTracks()[0];
+
+      if (track) {
+        transceiver.sender.replaceTrack(track);
+        transceiver.direction = "sendrecv";
       }
     });
   }, [localStream]);
@@ -142,7 +152,7 @@ export function useWebRTC({ roomId, sendSignal, onSignalReceived }: UseWebRTCOpt
           console.log("Processing WebRTC offer");
           await pc.setRemoteDescription(new RTCSessionDescription(signal));
 
-          // Drain queued ICE candidates
+          // Drain any queued ICE candidates
           while (pendingIceCandidatesRef.current.length > 0) {
             const cand = pendingIceCandidatesRef.current.shift();
             if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand));
@@ -179,9 +189,10 @@ export function useWebRTC({ roomId, sendSignal, onSignalReceived }: UseWebRTCOpt
     return unsubscribe;
   }, [onSignalReceived, initPeerConnection, sendSignal]);
 
-  // 5. Seat A initiates WebRTC Offer when entering signaling phase
+  // 5. Seat A sends WebRTC Offer upon entering signaling or live phase
   useEffect(() => {
-    if (roomState === "signaling" && seat === "A") {
+    if ((roomState === "signaling" || roomState === "live") && seat === "A" && !hasOfferedRef.current) {
+      hasOfferedRef.current = true;
       const pc = initPeerConnection();
       pc.createOffer()
         .then((offer) => pc.setLocalDescription(offer).then(() => offer))
@@ -192,10 +203,14 @@ export function useWebRTC({ roomId, sendSignal, onSignalReceived }: UseWebRTCOpt
             sdp: offer.sdp,
           });
         })
-        .catch((err) => console.error("Failed to generate offer:", err));
+        .catch((err) => {
+          hasOfferedRef.current = false;
+          console.error("Failed to generate offer:", err);
+        });
     }
   }, [roomState, seat, initPeerConnection, sendSignal]);
 
+  // 6. Toggle Mute: enables/disables microphone
   const toggleMute = () => {
     if (!localStream) return;
     const audioTrack = localStream.getAudioTracks()[0];
@@ -205,12 +220,49 @@ export function useWebRTC({ roomId, sendSignal, onSignalReceived }: UseWebRTCOpt
     }
   };
 
-  const toggleVideo = () => {
+  // 7. Toggle Video: physically stops hardware camera & turns off LED when off
+  const toggleVideo = async () => {
     if (!localStream) return;
-    const videoTrack = localStream.getVideoTracks()[0];
-    if (videoTrack) {
-      videoTrack.enabled = !videoTrack.enabled;
-      setIsVideoOff(!videoTrack.enabled);
+
+    if (!isVideoOff) {
+      // Turn camera OFF: stop all video tracks to turn off hardware sensor and LED
+      localStream.getVideoTracks().forEach((track) => {
+        track.stop();
+        localStream.removeTrack(track);
+      });
+
+      if (pcRef.current) {
+        pcRef.current.getTransceivers().forEach((t) => {
+          if (t.receiver.track.kind === "video") {
+            t.sender.replaceTrack(null);
+          }
+        });
+      }
+
+      setIsVideoOff(true);
+      setLocalStream(new MediaStream(localStream.getTracks()));
+    } else {
+      // Turn camera ON: request camera device from browser
+      try {
+        const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const newTrack = newStream.getVideoTracks()[0];
+        if (newTrack) {
+          localStream.addTrack(newTrack);
+
+          if (pcRef.current) {
+            pcRef.current.getTransceivers().forEach((t) => {
+              if (t.receiver.track.kind === "video") {
+                t.sender.replaceTrack(newTrack);
+              }
+            });
+          }
+
+          setIsVideoOff(false);
+          setLocalStream(new MediaStream(localStream.getTracks()));
+        }
+      } catch (err) {
+        console.warn("Could not re-activate camera:", err);
+      }
     }
   };
 

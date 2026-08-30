@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { User, Shield } from "lucide-react";
 
 interface VideoGridProps {
@@ -22,24 +22,58 @@ export function VideoGrid({
 }: VideoGridProps) {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [, setRerender] = useState(0);
 
+  // Sync local stream to local video element
   useEffect(() => {
     if (localVideoRef.current && localStream) {
       localVideoRef.current.srcObject = localStream;
     }
   }, [localStream]);
 
+  // Sync remote stream to remote video element
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
       remoteVideoRef.current.srcObject = remoteStream;
+      remoteVideoRef.current.play().catch((err) => {
+        console.warn("Remote video play pending:", err);
+      });
     }
   }, [remoteStream]);
 
+  // Track event listeners for track enable/mute changes
+  useEffect(() => {
+    if (!remoteStream) return;
+    const forceUpdate = () => setRerender((n) => n + 1);
+
+    remoteStream.getVideoTracks().forEach((track) => {
+      track.addEventListener("mute", forceUpdate);
+      track.addEventListener("unmute", forceUpdate);
+      track.addEventListener("ended", forceUpdate);
+    });
+
+    return () => {
+      remoteStream.getVideoTracks().forEach((track) => {
+        track.removeEventListener("mute", forceUpdate);
+        track.removeEventListener("unmute", forceUpdate);
+        track.removeEventListener("ended", forceUpdate);
+      });
+    };
+  }, [remoteStream]);
+
+  const hasRemoteVideo =
+    remoteStream &&
+    remoteStream.getVideoTracks().some((t) => t.enabled && t.readyState === "live");
+
+  const hasLocalVideo =
+    localStream &&
+    localStream.getVideoTracks().some((t) => t.enabled && t.readyState === "live");
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full h-[450px]">
-      {/* Remote Peer View (Main / Left) */}
+      {/* Remote Peer View (Left / Main) */}
       <div className="relative rounded-2xl bg-slate-900 border border-slate-700 overflow-hidden flex items-center justify-center shadow-lg">
-        {remoteStream && remoteStream.getVideoTracks().length > 0 ? (
+        {hasRemoteVideo ? (
           <video
             ref={remoteVideoRef}
             autoPlay
@@ -52,7 +86,9 @@ export function VideoGrid({
               <User className="w-10 h-10 text-slate-400" />
             </div>
             <span className="text-sm font-medium">
-              {connectionState === "connected" ? "Camera Off" : `Connecting... (${connectionState})`}
+              {connectionState === "connected"
+                ? "Camera Off"
+                : `Connecting... (${connectionState})`}
             </span>
           </div>
         )}
@@ -83,7 +119,7 @@ export function VideoGrid({
 
       {/* Local User View (Right) */}
       <div className="relative rounded-2xl bg-slate-900 border border-slate-700 overflow-hidden flex items-center justify-center shadow-lg">
-        {localStream && localStream.getVideoTracks().length > 0 ? (
+        {hasLocalVideo ? (
           <video
             ref={localVideoRef}
             autoPlay

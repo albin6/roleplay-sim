@@ -7,10 +7,27 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const matchmakingQueueKey = "matchmaking:queue"
+const (
+	matchmakingQueueEasy   = "matchmaking:queue:easy"
+	matchmakingQueueMedium = "matchmaking:queue:medium"
+	matchmakingQueueHard   = "matchmaking:queue:hard"
+)
 
-// MatchmakingQueueRepo manages the matchmaking Redis sorted set.
-// Members are userIDs, scores are Elo ratings (for approximate skill matching).
+var allQueueKeys = []string{matchmakingQueueEasy, matchmakingQueueMedium, matchmakingQueueHard}
+
+func getQueueKey(difficulty string) string {
+	switch difficulty {
+	case "easy":
+		return matchmakingQueueEasy
+	case "hard":
+		return matchmakingQueueHard
+	default:
+		return matchmakingQueueMedium
+	}
+}
+
+// MatchmakingQueueRepo manages the matchmaking Redis sorted sets per difficulty.
+// Members are userIDs, scores are Elo ratings.
 type MatchmakingQueueRepo struct {
 	client *redis.Client
 }
@@ -19,8 +36,14 @@ func NewMatchmakingQueueRepo(client *redis.Client) *MatchmakingQueueRepo {
 	return &MatchmakingQueueRepo{client: client}
 }
 
-func (r *MatchmakingQueueRepo) Enqueue(ctx context.Context, userID string, eloRating float64) error {
-	err := r.client.ZAdd(ctx, matchmakingQueueKey, redis.Z{
+func (r *MatchmakingQueueRepo) Enqueue(ctx context.Context, userID string, eloRating float64, difficulty string) error {
+	// First remove user from any existing queue so they cannot sit in multiple queues
+	for _, key := range allQueueKeys {
+		_ = r.client.ZRem(ctx, key, userID).Err()
+	}
+
+	key := getQueueKey(difficulty)
+	err := r.client.ZAdd(ctx, key, redis.Z{
 		Score:  eloRating,
 		Member: userID,
 	}).Err()
@@ -30,17 +53,19 @@ func (r *MatchmakingQueueRepo) Enqueue(ctx context.Context, userID string, eloRa
 	return nil
 }
 
-// Dequeue atomically pops the two users with the closest Elo ratings.
+// Dequeue atomically pops the two users with the closest Elo ratings for the given difficulty.
 // Returns empty strings if fewer than 2 users are queued.
-func (r *MatchmakingQueueRepo) Dequeue(ctx context.Context) (string, string, error) {
-	// Use a Lua script for atomicity: pop 2 members
+func (r *MatchmakingQueueRepo) Dequeue(ctx context.Context, difficulty string) (string, string, error) {
+	key := getQueueKey(difficulty)
+
+	// Use a Lua script for atomicity: pop 2 members from the specific difficulty queue
 	script := redis.NewScript(`
 		local count = redis.call('ZCARD', KEYS[1])
 		if count < 2 then return {nil, nil} end
 		local members = redis.call('ZPOPMIN', KEYS[1], 2)
 		return {members[1], members[3]}
 	`)
-	result, err := script.Run(ctx, r.client, []string{matchmakingQueueKey}).StringSlice()
+	result, err := script.Run(ctx, r.client, []string{key}).StringSlice()
 	if err != nil {
 		if err == redis.Nil {
 			return "", "", nil
@@ -54,22 +79,28 @@ func (r *MatchmakingQueueRepo) Dequeue(ctx context.Context) (string, string, err
 }
 
 func (r *MatchmakingQueueRepo) Remove(ctx context.Context, userID string) error {
-	return r.client.ZRem(ctx, matchmakingQueueKey, userID).Err()
+	for _, key := range allQueueKeys {
+		_ = r.client.ZRem(ctx, key, userID).Err()
+	}
+	return nil
 }
 
 func (r *MatchmakingQueueRepo) IsQueued(ctx context.Context, userID string) (bool, error) {
-	_, err := r.client.ZRank(ctx, matchmakingQueueKey, userID).Result()
-	if err == redis.Nil {
-		return false, nil
+	for _, key := range allQueueKeys {
+		_, err := r.client.ZRank(ctx, key, userID).Result()
+		if err == nil {
+			return true, nil
+		}
+		if err != redis.Nil {
+			return false, fmt.Errorf("matchmaking_queue: is_queued: %w", err)
+		}
 	}
-	if err != nil {
-		return false, fmt.Errorf("matchmaking_queue: is_queued: %w", err)
-	}
-	return true, nil
+	return false, nil
 }
 
-func (r *MatchmakingQueueRepo) Size(ctx context.Context) (int64, error) {
-	size, err := r.client.ZCard(ctx, matchmakingQueueKey).Result()
+func (r *MatchmakingQueueRepo) Size(ctx context.Context, difficulty string) (int64, error) {
+	key := getQueueKey(difficulty)
+	size, err := r.client.ZCard(ctx, key).Result()
 	if err != nil {
 		return 0, fmt.Errorf("matchmaking_queue: size: %w", err)
 	}

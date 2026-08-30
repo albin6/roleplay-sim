@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,23 +72,26 @@ func (h *Hub) Run(ctx context.Context) {
 }
 
 func (h *Hub) pollMatchmakingQueue(ctx context.Context) {
-	userIDA, userIDB, err := h.queueRepo.Dequeue(ctx)
-	if err != nil {
-		log.Error().Err(err).Msg("ws: failed to dequeue pair")
-		return
-	}
-	if userIDA == "" || userIDB == "" {
-		return
-	}
-
-	go func() {
-		if err := h.createMatch(context.Background(), userIDA, userIDB); err != nil {
-			log.Error().Err(err).Str("userA", userIDA).Str("userB", userIDB).Msg("ws: failed to create match")
+	difficulties := []string{"easy", "medium", "hard"}
+	for _, diff := range difficulties {
+		userIDA, userIDB, err := h.queueRepo.Dequeue(ctx, diff)
+		if err != nil {
+			log.Error().Err(err).Str("difficulty", diff).Msg("ws: failed to dequeue pair")
+			continue
 		}
-	}()
+		if userIDA == "" || userIDB == "" {
+			continue
+		}
+
+		go func(d string, a, b string) {
+			if err := h.createMatch(context.Background(), a, b, d); err != nil {
+				log.Error().Err(err).Str("userA", a).Str("userB", b).Str("difficulty", d).Msg("ws: failed to create match")
+			}
+		}(diff, userIDA, userIDB)
+	}
 }
 
-func (h *Hub) createMatch(ctx context.Context, userIDA, userIDB string) error {
+func (h *Hub) createMatch(ctx context.Context, userIDA, userIDB, difficulty string) error {
 	idA, err := uuid.Parse(userIDA)
 	if err != nil {
 		return err
@@ -106,14 +110,16 @@ func (h *Hub) createMatch(ctx context.Context, userIDA, userIDB string) error {
 		return err
 	}
 
-	// Pick random scenario from database
-	scenario, err := h.scenarioRepo.GetRandom(ctx, entity.DifficultyMedium, nil)
+	diff := entity.Difficulty(difficulty)
+
+	// Pick random scenario from database matching the exact difficulty
+	scenario, err := h.scenarioRepo.GetRandom(ctx, diff, nil)
 	if err != nil {
-		log.Warn().Err(err).Msg("ws: could not fetch random scenario, using default")
+		log.Warn().Err(err).Str("difficulty", difficulty).Msg("ws: could not fetch random scenario, using default")
 		scenario = &entity.Scenario{
 			ID:                     uuid.New(),
 			Title:                  "Leave Request Under Deadline Pressure",
-			Difficulty:             entity.DifficultyMedium,
+			Difficulty:             diff,
 			BackgroundContext:      "The team is 3 weeks from a major product release. Junior requests 2 days leave.",
 			RoleAObjective:         "Secure 2 days leave while keeping a collaborative relationship.",
 			RoleAConstraints:       []string{"Do not reveal a personal emergency", "Remain professional"},
@@ -130,7 +136,7 @@ func (h *Hub) createMatch(ctx context.Context, userIDA, userIDB string) error {
 	session := &entity.Session{
 		RoomID:     roomID,
 		ScenarioID: scenario.ID,
-		Difficulty: entity.DifficultyMedium,
+		Difficulty: diff,
 		State:      entity.SessionStateWaiting,
 	}
 	if err := h.sessionRepo.Create(ctx, session); err != nil {
@@ -168,7 +174,7 @@ func (h *Hub) createMatch(ctx context.Context, userIDA, userIDB string) error {
 			Seat:        "B",
 		},
 		ScenarioID: scenario.ID.String(),
-		Difficulty: entity.DifficultyMedium,
+		Difficulty: diff,
 	}
 	_ = h.roomState.Create(ctx, redisRoom)
 
@@ -176,7 +182,7 @@ func (h *Hub) createMatch(ctx context.Context, userIDA, userIDB string) error {
 	rm := NewRoomManager(
 		roomID,
 		userA, userB,
-		entity.DifficultyMedium,
+		diff,
 		scenario,
 		h.sessionRepo,
 		h.scenarioRepo,
@@ -248,12 +254,19 @@ func (h *Hub) HandleMessage(client *Client, env *Envelope) {
 		})
 
 	case EventJoinQueue:
+		var qp struct {
+			Difficulty string `json:"difficulty"`
+		}
+		diff := "medium"
+		if err := json.Unmarshal(env.Payload, &qp); err == nil && qp.Difficulty != "" {
+			diff = strings.ToLower(qp.Difficulty)
+		}
 		uID, err := uuid.Parse(client.UserID)
 		if err == nil {
 			u, err2 := h.userRepo.GetByID(context.Background(), uID)
 			if err2 == nil {
-				_ = h.queueRepo.Enqueue(context.Background(), client.UserID, u.EloRating)
-				log.Info().Str("user_id", client.UserID).Msg("ws: user joined matchmaking queue via WS")
+				_ = h.queueRepo.Enqueue(context.Background(), client.UserID, u.EloRating, diff)
+				log.Info().Str("user_id", client.UserID).Str("difficulty", diff).Msg("ws: user joined matchmaking queue via WS")
 			}
 		}
 
