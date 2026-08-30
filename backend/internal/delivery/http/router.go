@@ -77,11 +77,11 @@ func NewRouter(deps Dependencies) http.Handler {
 				r.Delete("/dequeue", mmH.Dequeue)
 				r.Get("/status", mmH.Status)
 			})
-
-			// Leaderboard
-			lbH := handler.NewLeaderboardHandler(deps.LeaderboardUC)
-			r.Get("/leaderboard", lbH.GetLeaderboard)
 		})
+
+		// Leaderboard (Public with optional user rank highlighting)
+		lbH := handler.NewLeaderboardHandler(deps.LeaderboardUC)
+		r.With(deps.AuthMW.OptionalAuthenticate).Get("/leaderboard", lbH.GetLeaderboard)
 	})
 
 	return r

@@ -64,6 +64,33 @@ func (m *AuthMiddleware) Authenticate(next http.Handler) http.Handler {
 	})
 }
 
+func (m *AuthMiddleware) OptionalAuthenticate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := extractBearerToken(r)
+		if token == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		claims, err := m.jwtSvc.ValidateAccessToken(token)
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		_, err = m.sessionStore.Get(r.Context(), claims.SessionID)
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), ContextKeyUserID, claims.UserID)
+		ctx = context.WithValue(ctx, ContextKeySessionID, claims.SessionID)
+		ctx = context.WithValue(ctx, ContextKeyRole, claims.Role)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func (m *AuthMiddleware) RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role := GetRole(r.Context())
