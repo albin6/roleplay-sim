@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/roleplay-sim/backend/internal/domain/entity"
 	"github.com/roleplay-sim/backend/internal/domain/repository"
+	"github.com/roleplay-sim/backend/internal/usecase/evaluation"
 	"github.com/rs/zerolog/log"
 )
 
@@ -24,6 +25,8 @@ type Hub struct {
 	queueRepo    repository.MatchmakingQueueRepository
 	roomState    repository.RoomStateRepository
 	webrtcCache  repository.WebRTCCacheRepository
+	audioBuffer  repository.AudioBufferRepository
+	evalUseCase  *evaluation.EvaluateSessionUseCase
 }
 
 func NewHub(
@@ -33,6 +36,8 @@ func NewHub(
 	queueRepo repository.MatchmakingQueueRepository,
 	roomState repository.RoomStateRepository,
 	webrtcCache repository.WebRTCCacheRepository,
+	audioBuffer repository.AudioBufferRepository,
+	evalUseCase *evaluation.EvaluateSessionUseCase,
 ) *Hub {
 	return &Hub{
 		clients:      make(map[string]*Client),
@@ -43,6 +48,8 @@ func NewHub(
 		queueRepo:    queueRepo,
 		roomState:    roomState,
 		webrtcCache:  webrtcCache,
+		audioBuffer:  audioBuffer,
+		evalUseCase:  evalUseCase,
 	}
 }
 
@@ -175,6 +182,7 @@ func (h *Hub) createMatch(ctx context.Context, userIDA, userIDB string) error {
 		h.scenarioRepo,
 		h.roomState,
 		h.webrtcCache,
+		h.evalUseCase,
 	)
 	rm.SessionID = session.ID
 
@@ -285,8 +293,14 @@ func (h *Hub) HandleMessage(client *Client, env *Envelope) {
 }
 
 func (h *Hub) HandleBinaryAudio(client *Client, data []byte) {
-	// Audio streaming placeholder for Phase 4 worker pipeline
-	log.Debug().Str("user_id", client.UserID).Int("bytes", len(data)).Msg("ws: received audio chunk")
+	roomID := client.GetRoomID()
+	if roomID == "" || len(data) == 0 || h.audioBuffer == nil {
+		return
+	}
+
+	go func() {
+		_ = h.audioBuffer.AppendChunk(context.Background(), roomID, client.UserID, 0, data)
+	}()
 }
 
 func (h *Hub) getRoomForClient(client *Client) *RoomManager {

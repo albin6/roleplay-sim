@@ -31,6 +31,7 @@ type Client struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	closeOnce sync.Once
+	closed    bool
 	mu        sync.RWMutex
 }
 
@@ -65,6 +66,12 @@ func (c *Client) GetRoomID() string {
 
 // Send serializes and enqueues an event envelope for delivery to the client.
 func (c *Client) Send(event EventType, payload any) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closed {
+		return
+	}
+
 	seq := c.seq.Add(1)
 	data, err := NewEnvelope(event, payload, seq)
 	if err != nil {
@@ -151,6 +158,10 @@ func (c *Client) WritePump() {
 // Close gracefully closes the client connection.
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+
 		c.cancel()
 		close(c.send)
 		_ = c.conn.Close(websocket.StatusNormalClosure, "disconnect")

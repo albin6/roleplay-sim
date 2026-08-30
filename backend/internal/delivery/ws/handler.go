@@ -63,6 +63,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Error().Err(err).Msg("ws: failed to accept upgrade")
 		return
 	}
+	conn.SetReadLimit(10 * 1024 * 1024) // 10 MB limit for binary audio streaming chunks
 
 	client := NewClient(claims.UserID, claims.Role, conn, h.hub)
 

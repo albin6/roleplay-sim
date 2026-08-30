@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/roleplay-sim/backend/internal/domain/entity"
 	"github.com/roleplay-sim/backend/internal/domain/repository"
+	"github.com/roleplay-sim/backend/internal/usecase/evaluation"
+	"github.com/roleplay-sim/backend/pkg/evaluator"
 	"github.com/roleplay-sim/backend/pkg/webrtc"
 	"github.com/rs/zerolog/log"
 )
@@ -40,6 +42,7 @@ type RoomManager struct {
 	scenarioRepo repository.ScenarioRepository
 	roomState    repository.RoomStateRepository
 	webrtcCache  repository.WebRTCCacheRepository
+	evalUseCase  *evaluation.EvaluateSessionUseCase
 }
 
 func NewRoomManager(
@@ -51,6 +54,7 @@ func NewRoomManager(
 	scenarioRepo repository.ScenarioRepository,
 	roomState repository.RoomStateRepository,
 	webrtcCache repository.WebRTCCacheRepository,
+	evalUseCase *evaluation.EvaluateSessionUseCase,
 ) *RoomManager {
 	prepSecs := 180
 	sessSecs := 360
@@ -93,6 +97,7 @@ func NewRoomManager(
 		scenarioRepo: scenarioRepo,
 		roomState:    roomState,
 		webrtcCache:  webrtcCache,
+		evalUseCase:  evalUseCase,
 	}
 }
 
@@ -391,6 +396,100 @@ func (r *RoomManager) advanceToEvaluatingLocked(reason string) {
 	if r.ClientB != nil {
 		r.ClientB.Send(EventSessionComplete, endPayload)
 	}
+
+	// Trigger asynchronous AI Evaluation Pipeline in background goroutine
+	go func() {
+		if r.evalUseCase == nil {
+			return
+		}
+
+		evalResult, err := r.evalUseCase.Execute(
+			context.Background(),
+			r.SessionID,
+			r.ID,
+			r.UserA,
+			r.UserB,
+			r.Scenario,
+			r.RoleA,
+			r.RoleB,
+		)
+		if err != nil {
+			log.Error().Err(err).Str("room_id", r.ID).Msg("ws: evaluation pipeline execution failed")
+			return
+		}
+
+		r.mu.Lock()
+		defer r.mu.Unlock()
+
+		r.State = entity.RoomStateComplete
+		_ = r.roomState.UpdateState(context.Background(), r.ID, entity.RoomStateComplete)
+
+		toRubricItems := func(items []evaluator.RubricItem) []RubricScoreItem {
+			res := make([]RubricScoreItem, len(items))
+			for i, it := range items {
+				res[i] = RubricScoreItem{
+					Dimension:     it.Dimension,
+					Score:         it.Score,
+					Weight:        it.Weight,
+					Justification: it.Justification,
+				}
+			}
+			return res
+		}
+
+		// Dispatch EVALUATION_READY to Client A
+		if r.ClientA != nil {
+			achievedA := evalResult.ScoreA.ObjectiveAchieved != nil && *evalResult.ScoreA.ObjectiveAchieved
+			achievedB := evalResult.ScoreB.ObjectiveAchieved != nil && *evalResult.ScoreB.ObjectiveAchieved
+
+			r.ClientA.Send(EventEvaluationReady, EvaluationReadyPayload{
+				RoomID:    r.ID,
+				SessionID: r.SessionID.String(),
+				YourScore: EvaluationScorePayload{
+					OverallScore:        evalResult.ScoreA.OverallScore,
+					ObjectiveAchieved:   achievedA,
+					EloDelta:            evalResult.EloDeltaA,
+					EloNew:              evalResult.EloNewA,
+					SummaryFeedback:     evalResult.ScoreA.SummaryFeedback,
+					Strengths:           evalResult.ScoreA.Strengths,
+					AreasForImprovement: evalResult.ScoreA.AreasForImprovement,
+					RubricScores:        toRubricItems(evalResult.ScoreA.RubricScores),
+				},
+				PeerScore: EvaluationPeerScorePayload{
+					OverallScore:      evalResult.ScoreB.OverallScore,
+					ObjectiveAchieved: achievedB,
+					EloDelta:          evalResult.EloDeltaB,
+				},
+			})
+		}
+
+		// Dispatch EVALUATION_READY to Client B
+		if r.ClientB != nil {
+			achievedA := evalResult.ScoreA.ObjectiveAchieved != nil && *evalResult.ScoreA.ObjectiveAchieved
+			achievedB := evalResult.ScoreB.ObjectiveAchieved != nil && *evalResult.ScoreB.ObjectiveAchieved
+
+			r.ClientB.Send(EventEvaluationReady, EvaluationReadyPayload{
+				RoomID:    r.ID,
+				SessionID: r.SessionID.String(),
+				YourScore: EvaluationScorePayload{
+					OverallScore:        evalResult.ScoreB.OverallScore,
+					ObjectiveAchieved:   achievedB,
+					EloDelta:            evalResult.EloDeltaB,
+					EloNew:              evalResult.EloNewB,
+					SummaryFeedback:     evalResult.ScoreB.SummaryFeedback,
+					Strengths:           evalResult.ScoreB.Strengths,
+					AreasForImprovement: evalResult.ScoreB.AreasForImprovement,
+					RubricScores:        toRubricItems(evalResult.ScoreB.RubricScores),
+				},
+				PeerScore: EvaluationPeerScorePayload{
+					OverallScore:      evalResult.ScoreA.OverallScore,
+					ObjectiveAchieved: achievedA,
+					EloDelta:          evalResult.EloDeltaA,
+				},
+			})
+		}
+		log.Info().Str("room_id", r.ID).Msg("ws: EVALUATION_READY broadcasted to peers")
+	}()
 }
 
 // HandlePrepReady marks a client as ready to begin the roleplay call.

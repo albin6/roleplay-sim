@@ -28,6 +28,14 @@ export function useWebSocket() {
     wsRef.current.send(JSON.stringify(envelope));
   }, []);
 
+  const sendBinary = useCallback((data: Blob | ArrayBuffer) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      console.warn("WebSocket not open, cannot send binary data");
+      return;
+    }
+    wsRef.current.send(data);
+  }, []);
+
   const on = useCallback((event: string, callback: (payload: any) => void) => {
     if (!listenersRef.current.has(event)) {
       listenersRef.current.set(event, new Set());
@@ -98,5 +106,5 @@ export function useWebSocket() {
     };
   }, [token, handleWSEvent]);
 
-  return { isConnected, send, on };
+  return { isConnected, send, sendBinary, on };
 }

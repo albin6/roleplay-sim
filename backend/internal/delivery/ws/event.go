@@ -160,6 +160,37 @@ type PongPayload struct {
 	LatencyHintMs int64  `json:"latency_hint_ms"`
 }
 
+type RubricScoreItem struct {
+	Dimension     string  `json:"dimension"`
+	Score         float64 `json:"score"`
+	Weight        float64 `json:"weight"`
+	Justification string  `json:"justification"`
+}
+
+type EvaluationScorePayload struct {
+	OverallScore        float64           `json:"overall_score"`
+	ObjectiveAchieved   bool              `json:"objective_achieved"`
+	EloDelta            float64           `json:"elo_delta"`
+	EloNew              float64           `json:"elo_new"`
+	SummaryFeedback     string            `json:"summary_feedback"`
+	Strengths           []string          `json:"strengths"`
+	AreasForImprovement []string          `json:"areas_for_improvement"`
+	RubricScores        []RubricScoreItem `json:"rubric_scores"`
+}
+
+type EvaluationPeerScorePayload struct {
+	OverallScore      float64 `json:"overall_score"`
+	ObjectiveAchieved bool    `json:"objective_achieved"`
+	EloDelta          float64 `json:"elo_delta"`
+}
+
+type EvaluationReadyPayload struct {
+	RoomID    string                     `json:"room_id"`
+	SessionID string                     `json:"session_id"`
+	YourScore EvaluationScorePayload     `json:"your_score"`
+	PeerScore EvaluationPeerScorePayload `json:"peer_score"`
+}
+
 // --- Client Payload Structs ---
 
 type RoomActionPayload struct {

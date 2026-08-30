@@ -9,6 +9,8 @@ import { useWebRTC } from "../../../hooks/useWebRTC";
 import { DualWheel } from "../../../components/wheel/DualWheel";
 import { VideoGrid } from "../../../components/room/VideoGrid";
 import { CallControls } from "../../../components/room/CallControls";
+import { useAudioRecorder } from "../../../hooks/useAudioRecorder";
+import ScorecardModal from "../../../components/room/ScorecardModal";
 import { Shield, Sparkles, CheckCircle2, AlertTriangle, ArrowRight, Home } from "lucide-react";
 
 export default function RoleplayRoomPage() {
@@ -31,7 +33,7 @@ export default function RoleplayRoomPage() {
     setRoomId,
   } = useRoomStore();
 
-  const { isConnected, send, on } = useWebSocket();
+  const { isConnected, send, sendBinary, on } = useWebSocket();
 
   const {
     localStream,
@@ -45,6 +47,12 @@ export default function RoleplayRoomPage() {
     roomId,
     sendSignal: (signal) => send("SIGNAL", { room_id: roomId, signal }),
     onSignalReceived: (handler) => on("SIGNAL", handler),
+  });
+
+  const { isRecording, chunksSent } = useAudioRecorder({
+    localStream,
+    isLive: state === "live",
+    sendBinary,
   });
 
   useEffect(() => {
@@ -199,6 +207,14 @@ export default function RoleplayRoomPage() {
               connectionState={connectionState}
             />
 
+            {/* Audio Recording Status Indicator */}
+            {isRecording && (
+              <div className="self-center flex items-center gap-2 px-4 py-1.5 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-semibold animate-pulse">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+                <span>AI Dual-Channel Audio Active ({chunksSent} chunks streamed)</span>
+              </div>
+            )}
+
             <CallControls
               isMuted={isMuted}
               isVideoOff={isVideoOff}
@@ -235,68 +251,13 @@ export default function RoleplayRoomPage() {
           </div>
         )}
 
-        {/* Phase 6: Complete & Feedback */}
+        {/* Phase 6: Complete & Rich Scorecard Modal */}
         {state === "complete" && evaluation && (
-          <div className="w-full max-w-2xl bg-slate-900 rounded-3xl border border-slate-800 p-8 shadow-2xl animate-fade-in">
-            <div className="text-center mb-8">
-              <span className="text-xs uppercase font-bold text-emerald-400">Simulation Complete</span>
-              <h1 className="text-3xl font-black text-white mt-1">Performance Evaluation</h1>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 mb-6">
-              <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 text-center">
-                <span className="text-xs text-slate-400">Overall Score</span>
-                <div className="text-4xl font-black text-indigo-400 mt-1">
-                  {evaluation.your_score.overall_score.toFixed(1)}
-                  <span className="text-sm text-slate-500">/100</span>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 text-center">
-                <span className="text-xs text-slate-400">Elo Rating Update</span>
-                <div
-                  className={`text-4xl font-black mt-1 ${
-                    evaluation.your_score.elo_delta >= 0 ? "text-emerald-400" : "text-rose-400"
-                  }`}
-                >
-                  {evaluation.your_score.elo_delta >= 0 ? "+" : ""}
-                  {evaluation.your_score.elo_delta.toFixed(1)}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-4 mb-8">
-              <div className="p-4 rounded-xl bg-slate-950/40 border border-slate-800">
-                <span className="text-xs font-semibold text-slate-400 uppercase">Executive Feedback</span>
-                <p className="text-sm text-slate-300 mt-1">
-                  {evaluation.your_score.summary_feedback}
-                </p>
-              </div>
-
-              {evaluation.your_score.strengths?.length > 0 && (
-                <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-500/20">
-                  <span className="text-xs font-semibold text-emerald-400 uppercase">Top Strengths</span>
-                  <ul className="mt-1.5 space-y-1">
-                    {evaluation.your_score.strengths.map((s, i) => (
-                      <li key={i} className="text-xs text-emerald-200">
-                        • {s}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-
-            <div className="flex justify-center">
-              <button
-                onClick={() => router.push("/")}
-                className="flex items-center gap-2 px-8 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition shadow-lg shadow-indigo-600/30"
-              >
-                <span>Return to Dashboard</span>
-                <ArrowRight className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
+          <ScorecardModal
+            data={evaluation}
+            scenarioTitle={scenario?.title}
+            onClose={() => router.push("/")}
+          />
         )}
       </div>
     </main>

@@ -16,10 +16,10 @@ import (
 )
 
 type RegisterInput struct {
-	Username    string
-	Email       string
-	Password    string
-	DisplayName string
+	Username    string `json:"username"`
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+	DisplayName string `json:"display_name"`
 }
 
 type AuthResult struct {

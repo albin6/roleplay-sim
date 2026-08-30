@@ -12,8 +12,8 @@ import (
 )
 
 type LoginInput struct {
-	Email    string
-	Password string
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type LoginUseCase struct {

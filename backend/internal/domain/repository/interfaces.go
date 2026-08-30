@@ -103,3 +103,10 @@ type WebRTCCacheRepository interface {
 	GetSignals(ctx context.Context, roomID, forUserID string) ([][]byte, error)
 	ClearSignals(ctx context.Context, roomID, forUserID string) error
 }
+
+// AudioBufferRepository manages streaming audio chunks in Redis Streams.
+type AudioBufferRepository interface {
+	AppendChunk(ctx context.Context, roomID, userID string, chunkIndex int, data []byte) error
+	GetChunks(ctx context.Context, roomID, userID string) ([][]byte, error)
+	ClearBuffer(ctx context.Context, roomID, userID string) error
+}
