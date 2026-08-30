@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS rubric_scores CASCADE;
+DROP TABLE IF EXISTS evaluations CASCADE;

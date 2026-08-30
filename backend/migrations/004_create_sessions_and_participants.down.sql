@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS session_participants CASCADE;
+DROP TABLE IF EXISTS sessions CASCADE;

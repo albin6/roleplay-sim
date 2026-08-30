@@ -1,0 +1,26 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+
+# Secrets - NEVER commit
+secrets/
+*.pem
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Test artifacts
+coverage.out
+*.test
+
+# sqlc generated (committed to git for reproducibility, but exclude if preferred)
+# internal/repository/postgres/db/
+
+# Docker
+.docker/
