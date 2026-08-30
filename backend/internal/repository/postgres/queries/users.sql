@@ -41,14 +41,16 @@ WHERE id = $1;
 -- name: GetLeaderboard :many
 SELECT * FROM users
 WHERE is_active = true
-ORDER BY elo_rating DESC, total_sessions DESC
+ORDER BY elo_rating DESC, total_sessions DESC, wins DESC, created_at ASC
 LIMIT $1 OFFSET $2;
 
 -- name: GetLeaderboardCount :one
 SELECT COUNT(*) FROM users WHERE is_active = true;
 
 -- name: GetUserRank :one
-SELECT COUNT(*) + 1 AS rank
-FROM users
-WHERE elo_rating > (SELECT elo_rating FROM users WHERE id = $1)
-  AND is_active = true;
+WITH ranked_users AS (
+    SELECT id, ROW_NUMBER() OVER (ORDER BY elo_rating DESC, total_sessions DESC, wins DESC, created_at ASC) as rank
+    FROM users
+    WHERE is_active = true
+)
+SELECT rank FROM ranked_users WHERE id = $1;

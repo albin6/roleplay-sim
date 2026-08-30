@@ -215,7 +215,7 @@ func (q *Queries) IncrementSessions(ctx context.Context, id uuid.UUID) error {
 const getLeaderboard = `-- name: GetLeaderboard :many
 SELECT id, username, email, password_hash, display_name, avatar_url, elo_rating, total_sessions, wins, losses, role, is_active, created_at, updated_at FROM users
 WHERE is_active = true
-ORDER BY elo_rating DESC, total_sessions DESC
+ORDER BY elo_rating DESC, total_sessions DESC, wins DESC, created_at ASC
 LIMIT $1 OFFSET $2
 `
 
@@ -271,10 +271,12 @@ func (q *Queries) GetLeaderboardCount(ctx context.Context) (int64, error) {
 }
 
 const getUserRank = `-- name: GetUserRank :one
-SELECT COUNT(*) + 1 AS rank
-FROM users
-WHERE elo_rating > (SELECT elo_rating FROM users WHERE id = $1)
-  AND is_active = true
+WITH ranked_users AS (
+    SELECT id, ROW_NUMBER() OVER (ORDER BY elo_rating DESC, total_sessions DESC, wins DESC, created_at ASC) as rank
+    FROM users
+    WHERE is_active = true
+)
+SELECT rank FROM ranked_users WHERE id = $1
 `
 
 func (q *Queries) GetUserRank(ctx context.Context, id uuid.UUID) (int64, error) {
