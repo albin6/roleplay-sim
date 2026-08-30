@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -55,17 +54,13 @@ func (e *EvaluatorService) Evaluate(ctx context.Context, params UserPromptParams
 		return e.fallbackEvaluation(params, "mock-gemini-1.5-flash"), nil
 	}
 
-	model := "gemini-1.5-flash"
-	if strings.ToLower(params.Difficulty) == "hard" {
-		model = "gemini-1.5-pro"
-	}
+	model := "gemini-3.6-flash"
+	fallbackModel := "gemini-3.5-flash"
 
 	resp, err := e.callGemini(ctx, model, params)
 	if err != nil {
-		log.Warn().Err(err).Str("model", model).Msg("evaluator: Gemini call failed, retrying with gemini-1.5-pro")
-		if model != "gemini-1.5-pro" {
-			resp, err = e.callGemini(ctx, "gemini-1.5-pro", params)
-		}
+		log.Warn().Err(err).Str("model", model).Msg("evaluator: primary Gemini call failed, retrying with fallback model")
+		resp, err = e.callGemini(ctx, fallbackModel, params)
 	}
 
 	if err != nil {
